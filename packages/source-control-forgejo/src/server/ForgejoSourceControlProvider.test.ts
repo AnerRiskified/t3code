@@ -100,6 +100,70 @@ it.effect("reads clone URLs on the given host rather than the checkout's", () =>
   );
 });
 
+it.effect(
+  "reports an fj login on a plain-HTTP server as authenticated without a project remote",
+  () => {
+    const whoamiHosts: string[] = [];
+    const client = HttpClient.make((request) =>
+      request.url.startsWith("http://")
+        ? Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(encodeJson({ login: "maria" }))),
+          )
+        : Effect.die(new Error("received corrupt message of type InvalidContentType")),
+    );
+    return Effect.gen(function* () {
+      const cli = yield* ForgejoCli.make;
+      const spec = yield* ForgejoSourceControlProvider.makeDiscovery.pipe(
+        Effect.provideService(ForgejoCli.ForgejoCli, cli),
+      );
+      assert.strictEqual(spec.type, "managed-cli");
+      if (spec.type !== "managed-cli") return;
+      const result = yield* spec.probe("/home/maria");
+      assert.strictEqual(result.auth.status, "authenticated");
+      assert.deepStrictEqual(result.auth.account, Option.some("maria"));
+      assert.include(whoamiHosts, "http://forgejo.internal:3000");
+    }).pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({
+          exists: () => Effect.succeed(true),
+          // fj stores only host:port, never the scheme.
+          readFileString: () =>
+            Effect.succeed(
+              encodeJson({
+                hosts: { "forgejo.internal:3000": { type: "Application", token: "test-token" } },
+              }),
+            ),
+        }),
+      ),
+      Effect.provide(
+        TestSourceControlHost.layer({
+          process: {
+            run: (input) => {
+              if (input.command === "git")
+                return Effect.succeed(
+                  processOutput("", { exitCode: ChildProcessSpawner.ExitCode(2) }),
+                );
+              assert.strictEqual(input.command, "fj");
+              if (input.args[0] === "version") return Effect.succeed(processOutput("fj v0.7.0"));
+              assert.deepStrictEqual(input.args.slice(0, 1), ["--host"]);
+              whoamiHosts.push(input.args[1]!);
+              // An HTTP-only server answers a TLS handshake with plain HTTP.
+              return Effect.succeed(
+                input.args[1]!.startsWith("http://")
+                  ? processOutput("currently signed into maria@forgejo.internal:3000")
+                  : processOutput("", { exitCode: ChildProcessSpawner.ExitCode(1) }),
+              );
+            },
+          },
+        }),
+      ),
+      Effect.provideService(HostProcess.HomeDirectory, "/home/maria"),
+    );
+  },
+);
+
 const requiredChecksPullRequest = {
   number: 7,
   title: "Required checks",
