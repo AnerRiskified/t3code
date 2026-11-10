@@ -96,6 +96,16 @@ describe("V2 client presentation", () => {
         pendingBackgroundTasks: [],
       }).runtime,
     ).toBeNull();
+    // An imported thread binds its provider thread without ever running in T3.
+    expect(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        latestRunId: null,
+        activeProviderThreadId: ProviderThreadId.make("provider-thread-imported"),
+        status: "idle",
+        pendingBackgroundTasks: [],
+      }).runtime,
+    ).toBeNull();
   });
 
   it.each([
